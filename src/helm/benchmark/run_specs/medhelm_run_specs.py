@@ -1992,11 +1992,18 @@ def get_clinicare_spec(
     """CliniCARE-Bench. Runs each case live through the CliniCARE checkout (``clinicare_root`` or
     ``CLINICARE_ROOT``), or replays a finished CliniCARE job dir when ``job_dir`` is given.
     ``model=`` is the evaluated model; benchmark/static/clinicare_model_map.yaml maps it to a system."""
-    scenario_args: Dict[str, str] = {"tasks_dir": tasks_dir, "clinicare_root": clinicare_root}
-    if cohort_csv:
-        scenario_args["cohort_csv"] = cohort_csv
-    if task_ids:
-        scenario_args["task_ids"] = task_ids
+    # Only non-empty args: scenario args appear in published group titles, and paths must not. Prefer
+    # CLINICARE_ROOT / CLINICARE_TASKS_DIR in the environment over paths on a published run entry.
+    scenario_args: Dict[str, str] = {
+        key: value
+        for key, value in {
+            "tasks_dir": tasks_dir,
+            "clinicare_root": clinicare_root,
+            "cohort_csv": cohort_csv,
+            "task_ids": task_ids,
+        }.items()
+        if value
+    }
     scenario_spec = ScenarioSpec(
         class_name="helm.benchmark.scenarios.clinicare_scenario.CliniCAREScenario",
         args=scenario_args,

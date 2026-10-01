@@ -48,3 +48,9 @@ def test_run_spec_has_outcome_and_offline_metrics():
     classes = [m.class_name for m in get_clinicare_spec().metric_specs]
     assert "helm.benchmark.metrics.clinicare_metrics.CliniCAREOutcomeMetric" in classes
     assert "helm.benchmark.metrics.clinicare_metrics.CliniCAREOfflineMetric" in classes
+
+
+def test_empty_args_stay_out_of_the_scenario_spec():
+    # Scenario args are shown in published group titles: a default run entry must carry no paths.
+    assert get_clinicare_spec().scenario_spec.args == {}
+    assert get_clinicare_spec(task_ids="a+b").scenario_spec.args == {"task_ids": "a+b"}
