@@ -9,3 +9,7 @@ VERDICT_LABELS = (
     "INDETERMINATE_LACK_OF_DATA",
     "INDETERMINATE_MEDICAL_AMBIGUITY",
 )
+
+CLINICARE_PROTOCOL = "clinicare.v1"
+# Internal routing deployment. Leaderboard rows use the evaluated model, never this name.
+CLINICARE_REPLAY_DEPLOYMENT = "clinicare/replay"

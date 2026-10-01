@@ -23,6 +23,13 @@ model_deployments:
     client_spec:
       class_name: "helm.clients.health_admin_bench_client.HealthAdminBenchClient"
 
+  - name: clinicare/replay
+    model_name: clinicare/replay
+    tokenizer_name: simple/tokenizer1
+    max_sequence_length: 8192
+    client_spec:
+      class_name: "helm.clients.clinicare_replay_client.CliniCAREReplayClient"
+
   # Stanford Health Care
   # For internal use only for MedHELM
   # Placed earlier in the file to make them non-default
@@ -2821,6 +2828,13 @@ model_deployments:
     max_sequence_length: 1047576
     client_spec:
       class_name: "helm.clients.openai_client.OpenAIClient"
+
+  - name: openai/gpt-5.6-sol
+    model_name: openai/gpt-5.6-sol
+    tokenizer_name: openai/o200k_base
+    max_sequence_length: 400000
+    client_spec:
+      class_name: "helm.clients.openai_responses_client.OpenAIResponseClient"
 
   - name: openai/gpt-5-2025-08-07
     model_name: openai/gpt-5-2025-08-07

@@ -14,6 +14,7 @@ import yaml
 from helm.benchmark.adaptation.adapter_spec import (
     ADAPT_MULTIPLE_CHOICE_JOINT,
     ADAPT_CHAT,
+    ADAPT_CLINICARE,
     ADAPT_HEALTH_ADMIN_BENCH,
     AdapterSpec,
 )
@@ -1973,4 +1974,45 @@ def get_health_admin_bench_spec(
         adapter_spec=adapter_spec,
         metric_specs=metric_specs,
         groups=["health_admin_bench"],
+    )
+
+
+@run_spec_function("clinicare")
+def get_clinicare_spec(tasks_dir: str, job_dir: str, cohort_csv: str = "", task_ids: str = "") -> RunSpec:
+    """Score a finished CliniCARE job dir. ``model=`` must be the model that produced the job."""
+    scenario_args: Dict[str, str] = {"tasks_dir": tasks_dir}
+    if cohort_csv:
+        scenario_args["cohort_csv"] = cohort_csv
+    if task_ids:
+        scenario_args["task_ids"] = task_ids
+    scenario_spec = ScenarioSpec(
+        class_name="helm.benchmark.scenarios.clinicare_scenario.CliniCAREScenario",
+        args=scenario_args,
+    )
+
+    adapter_spec = AdapterSpec(
+        method=ADAPT_CLINICARE,
+        instructions=json.dumps({"tasks_dir": tasks_dir, "job_dir": job_dir}),
+        input_prefix="",
+        input_suffix="",
+        output_prefix="",
+        output_suffix="",
+        instance_prefix="",
+        max_train_instances=0,
+        num_outputs=1,
+        max_tokens=1,
+        temperature=0.0,
+        stop_sequences=[],
+    )
+
+    metric_specs = [
+        MetricSpec(class_name="helm.benchmark.metrics.clinicare_metrics.CliniCAREOutcomeMetric", args={})
+    ] + get_basic_metric_specs([])
+
+    return RunSpec(
+        name="clinicare",
+        scenario_spec=scenario_spec,
+        adapter_spec=adapter_spec,
+        metric_specs=metric_specs,
+        groups=["clinicare"],
     )
