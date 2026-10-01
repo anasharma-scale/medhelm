@@ -1978,9 +1978,21 @@ def get_health_admin_bench_spec(
 
 
 @run_spec_function("clinicare")
-def get_clinicare_spec(tasks_dir: str, job_dir: str, cohort_csv: str = "", task_ids: str = "") -> RunSpec:
-    """Score a finished CliniCARE job dir. ``model=`` must be the model that produced the job."""
-    scenario_args: Dict[str, str] = {"tasks_dir": tasks_dir}
+def get_clinicare_spec(
+    clinicare_root: str = "",
+    tasks_dir: str = "",
+    job_dir: str = "",
+    jobs_dir: str = "",
+    effort: str = "",
+    grade: str = "",
+    case_timeout_sec: str = "",
+    cohort_csv: str = "",
+    task_ids: str = "",
+) -> RunSpec:
+    """CliniCARE-Bench. Runs each case live through the CliniCARE checkout (``clinicare_root`` or
+    ``CLINICARE_ROOT``), or replays a finished CliniCARE job dir when ``job_dir`` is given.
+    ``model=`` is the evaluated model; benchmark/static/clinicare_model_map.yaml maps it to a system."""
+    scenario_args: Dict[str, str] = {"tasks_dir": tasks_dir, "clinicare_root": clinicare_root}
     if cohort_csv:
         scenario_args["cohort_csv"] = cohort_csv
     if task_ids:
@@ -1990,9 +2002,18 @@ def get_clinicare_spec(tasks_dir: str, job_dir: str, cohort_csv: str = "", task_
         args=scenario_args,
     )
 
+    knobs: Dict[str, Any] = {
+        "clinicare_root": clinicare_root,
+        "tasks_dir": tasks_dir,
+        "job_dir": job_dir,
+        "jobs_dir": jobs_dir,
+        "effort": effort,
+        "grade": str(grade).strip().lower() in ("1", "true", "yes", "on"),
+        "case_timeout_sec": case_timeout_sec,
+    }
     adapter_spec = AdapterSpec(
         method=ADAPT_CLINICARE,
-        instructions=json.dumps({"tasks_dir": tasks_dir, "job_dir": job_dir}),
+        instructions=json.dumps({key: value for key, value in knobs.items() if value not in ("", None, False)}),
         input_prefix="",
         input_suffix="",
         output_prefix="",
@@ -2006,7 +2027,8 @@ def get_clinicare_spec(tasks_dir: str, job_dir: str, cohort_csv: str = "", task_
     )
 
     metric_specs = [
-        MetricSpec(class_name="helm.benchmark.metrics.clinicare_metrics.CliniCAREOutcomeMetric", args={})
+        MetricSpec(class_name="helm.benchmark.metrics.clinicare_metrics.CliniCAREOutcomeMetric", args={}),
+        MetricSpec(class_name="helm.benchmark.metrics.clinicare_metrics.CliniCAREOfflineMetric", args={}),
     ] + get_basic_metric_specs([])
 
     return RunSpec(

@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from helm.benchmark.presentation.taxonomy_info import TaxonomyInfo
-from helm.benchmark.scenarios.clinicare_constants import CLINICARE_TASKS_DIR_ENV, VERDICT_LABELS
+from helm.benchmark.scenarios.clinicare_constants import (
+    CLINICARE_ROOT_ENV,
+    CLINICARE_TASKS_DIR_ENV,
+    VERDICT_LABELS,
+)
 from helm.benchmark.scenarios.scenario import (
     CORRECT_TAG,
     TEST_SPLIT,
@@ -26,16 +30,26 @@ from helm.benchmark.scenarios.scenario import (
 TASK_ID_PATTERN = re.compile(r"^(?P<scenario_id>[a-z0-9]+(?:-[a-z0-9]+)*)-[0-9a-f]{6}$")
 
 
-def resolve_tasks_dir(explicit: str = "") -> Path:
+def resolve_clinicare_root(explicit: str = "") -> Optional[Path]:
+    """The CliniCARE checkout: ``clinicare_root`` argument, then ``CLINICARE_ROOT``; None if unset."""
+    raw = (explicit or "").strip() or (os.environ.get(CLINICARE_ROOT_ENV) or "").strip()
+    return Path(raw).expanduser().resolve() if raw else None
+
+
+def resolve_tasks_dir(explicit: str = "", clinicare_root: str = "") -> Path:
     """Locate a built CliniCARE tasks dir (``benchmark/tasks/`` in a CliniCARE checkout).
 
-    Precedence: ``tasks_dir`` argument, then ``CLINICARE_TASKS_DIR``.
+    Precedence: ``tasks_dir`` argument, ``CLINICARE_TASKS_DIR``, then ``<CliniCARE root>/benchmark/tasks``.
     """
     raw = (explicit or "").strip() or (os.environ.get(CLINICARE_TASKS_DIR_ENV) or "").strip()
+    root = resolve_clinicare_root(clinicare_root)
+    if not raw and root is not None:
+        raw = str(root / "benchmark" / "tasks")
     if not raw:
         raise FileNotFoundError(
-            "No CliniCARE tasks dir given. Set tasks_dir= on the run entry or export "
-            f"{CLINICARE_TASKS_DIR_ENV}. Build one with CliniCARE's benchmark/scripts/build_tasks.py."
+            "No CliniCARE tasks dir given. Set tasks_dir= or clinicare_root= on the run entry, or export "
+            f"{CLINICARE_TASKS_DIR_ENV} or {CLINICARE_ROOT_ENV}. Build tasks with CliniCARE's "
+            "benchmark/scripts/build_tasks.py."
         )
     path = Path(raw).expanduser().resolve()
     if not path.is_dir():
@@ -96,15 +110,16 @@ class CliniCAREScenario(Scenario):
     )
     tags = ["agentic", "biomedical", "ehr"]
 
-    def __init__(self, tasks_dir: str = "", cohort_csv: str = "", task_ids: str = ""):
+    def __init__(self, tasks_dir: str = "", cohort_csv: str = "", task_ids: str = "", clinicare_root: str = ""):
         super().__init__()
         self.tasks_dir = tasks_dir
+        self.clinicare_root = clinicare_root
         self.cohort_csv = cohort_csv
         self.task_ids = parse_task_ids(task_ids)
 
     def get_instances(self, output_path: str) -> List[Instance]:
         del output_path  # tasks live in the CliniCARE build, not HELM's scenario cache
-        tasks_dir = resolve_tasks_dir(self.tasks_dir)
+        tasks_dir = resolve_tasks_dir(self.tasks_dir, self.clinicare_root)
         cohort: Optional[Dict[str, Dict[str, str]]] = load_cohort_labels(self.cohort_csv) if self.cohort_csv else None
         allowed_ids = set(self.task_ids)
         instances: List[Instance] = []

@@ -7,7 +7,7 @@ from typing import List
 
 from helm.benchmark.adaptation.adapters.in_context_learning_adapter import InContextLearningAdapter
 from helm.benchmark.adaptation.request_state import RequestState
-from helm.benchmark.scenarios.clinicare_constants import CLINICARE_PROTOCOL, CLINICARE_REPLAY_DEPLOYMENT
+from helm.benchmark.scenarios.clinicare_constants import CLINICARE_PROTOCOL, CLINICARE_HARNESS_DEPLOYMENT
 from helm.benchmark.scenarios.scenario import Instance
 from helm.common.request import Request
 
@@ -28,7 +28,7 @@ def build_clinicare_request(instance: Instance, adapter_spec) -> Request:
     }
     return Request(
         model=adapter_spec.model,
-        model_deployment=CLINICARE_REPLAY_DEPLOYMENT,
+        model_deployment=CLINICARE_HARNESS_DEPLOYMENT,
         prompt=json.dumps(envelope),
         num_completions=1,
         temperature=0.0,
