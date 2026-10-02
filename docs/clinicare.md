@@ -82,7 +82,7 @@ An unmapped model fails closed. Every trial, live or replayed, is checked agains
 
 Cases run in parallel: `--num-threads N` means N concurrent episodes, each with its own containers. Start with 4–8 on a laptop and up to 16 on a large machine. Your model provider's rate limit is usually the binding constraint. If you see 429s, lower it rather than relying on retries.
 
-Each case is a harbor job under `$CLINICARE_ROOT/jobs/medhelm/` (override with `jobs_dir=`), named after the system, effort and task. Re-running the same suite returns finished cases immediately without re-running them, so an interrupted run resumes for free.
+Each case is a harbor job under `$CLINICARE_ROOT/jobs/medhelm/` (override with `jobs_dir=`), named after the system, effort, tasks build and task. Re-running the same suite returns finished cases immediately without re-running them, so an interrupted run resumes for free. A finished case is reused only while its task is byte-identical to the current build. After a CliniCARE update or a task rebuild, `run_case.py` refuses the old trial and the run stops, so point `jobs_dir=` at a fresh directory.
 
 ## Smoke test
 
@@ -156,6 +156,8 @@ CliniCARE task ids are a hash of case parameters and **identify the patient** to
 | Codex trials die with `403 Forbidden` from a gateway | The gateway does not accept the Codex client. Use a gateway that does, or a different system. |
 | Codex `invalid_encrypted_content` on the second turn | A load-balancing gateway split the model across deployments. Set `CODEX_PIN_DEPLOYMENT` in CliniCARE's `.env` (see `codex_mcp_fix.py`). |
 | A re-run never retries a dead case | Harbor keeps finished trials, failed ones included. Delete that case's job dir under `jobs/medhelm/` to re-run it. |
+| `run_case failed ... built from a different version of task` or `harbor refused the job` | The jobs dir holds results from an older CliniCARE or task build. Use a fresh `jobs_dir=` (or delete the old one) and re-run. |
+| Cases fail with 401s although CliniCARE's `.env` has the right key | A variable exported in your shell wins over `.env` (as for HealthAdminBench). Unset `OPENAI_API_KEY` / `*_BASE_URL` in the shell that runs `medhelm-run`, or make them match. |
 
 ## Summary
 

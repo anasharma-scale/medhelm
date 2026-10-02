@@ -10,8 +10,10 @@ or model calls.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import signal
 import subprocess
 import threading
 from pathlib import Path
@@ -27,9 +29,9 @@ from helm.common.hierarchical_logger import hlog
 from helm.common.request import ErrorFlags, GeneratedOutput, Request, RequestResult
 from helm.proxy.retry import NonRetriableException
 
-# run_case.py exits 2 for usage/preflight errors (missing key, unbuilt tasks, gateway not
-# allowlisted): the setup is broken, so every remaining case would fail the same way.
-RUN_CASE_USAGE_ERROR = 2
+# run_case.py reports every per-case outcome (ok / agent_error / dead) with exit 0. Any other exit
+# means the setup or the job is broken (missing key, unbuilt tasks, gateway not allowlisted, harbor
+# refusing a job, a stale trial, a crash), so every remaining case would fail the same way: abort.
 # CliniCARE's agent ceiling is 5400 s, plus up to 3x the 360 s harness setup and the verifier.
 DEFAULT_CASE_TIMEOUT_SEC = 7200
 
@@ -63,9 +65,27 @@ def require_docker() -> None:
         raise RuntimeError(f"CliniCARE needs a running Docker daemon. `docker info` failed: {detail}")
 
 
-def job_name(system: str, task_id: str, effort: Optional[str] = None) -> str:
-    """One harbor job per (system, effort, case). Deterministic, so re-running resumes it."""
-    return f"medhelm_{system}" + (f"_eff-{effort}" if effort else "") + f"_{task_id}"
+def job_name(system: str, task_id: str, tasks_dir: Path, effort: Optional[str] = None) -> str:
+    """One harbor job per (system, effort, tasks build, case). Deterministic, so re-running resumes it.
+
+    The tasks-dir hash keeps two builds that share task ids (a smoke dir and the full build) from
+    colliding on one job dir, which harbor would refuse to resume.
+    """
+    build = hashlib.sha256(str(Path(tasks_dir).resolve()).encode()).hexdigest()[:8]
+    return f"medhelm_{system}" + (f"_eff-{effort}" if effort else "") + f"_{build}_{task_id}"
+
+
+def run_in_process_group(cmd: list, timeout: int, **kwargs: Any) -> subprocess.CompletedProcess:
+    """subprocess.run, but a timeout kills the whole process group: run_case.py's harbor child and
+    its containers' clients, not just run_case.py (which would leave harbor running and writing)."""
+    with subprocess.Popen(cmd, start_new_session=True, **kwargs) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def read_trial(trial_dir: Path) -> Dict[str, Any]:
@@ -173,7 +193,7 @@ class CliniCAREClient(Client):
             "--jobs-dir",
             str(jobs_dir),
             "--job-name",
-            job_name(system, task_id, effort),
+            job_name(system, task_id, tasks_dir, effort),
         ]
         if effort:
             cmd += ["--effort", effort]
@@ -181,15 +201,22 @@ class CliniCAREClient(Client):
             cmd += ["--grade"]
         timeout = int(envelope.get("case_timeout_sec") or DEFAULT_CASE_TIMEOUT_SEC)
         try:
-            proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=timeout, env=os.environ.copy())
+            proc = run_in_process_group(
+                cmd,
+                timeout,
+                cwd=root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=os.environ.copy(),
+            )
         except subprocess.TimeoutExpired:
             return _failed(f"CliniCARE case timed out after {timeout}s", fatal=False)
-        if proc.returncode == RUN_CASE_USAGE_ERROR:
-            # Broken setup (missing key, unbuilt tasks, gateway not allowlisted): abort the run
-            # rather than record hundreds of empty results.
-            return _failed(f"CliniCARE run_case refused: {proc.stderr.strip()[-2000:]}", fatal=True)
         if proc.returncode != 0:
-            return _failed(f"CliniCARE run_case exited {proc.returncode}: {proc.stderr.strip()[-2000:]}", fatal=False)
+            # Abort the run rather than record hundreds of empty results (see the note at the top).
+            return _failed(
+                f"CliniCARE run_case failed (exit {proc.returncode}): {proc.stderr.strip()[-2000:]}", fatal=True
+            )
         report = json.loads(proc.stdout.strip().splitlines()[-1])
         trial = read_trial(Path(report["trial_dir"]))
         self._check_attribution(trial["model_name"], row, Path(report["trial_dir"]))
@@ -201,6 +228,8 @@ class CliniCAREClient(Client):
 
     def _index_job(self, job_dir: str, tasks_dir: Path, row: Dict[str, Any]) -> Dict[str, Path]:
         job = Path(job_dir).expanduser()
+        if not job.is_dir():
+            raise NonRetriableException(f"CliniCARE job dir not found: {job}")
         trials: Dict[str, Path] = {}
         models = set()
         for trial in sorted(job.glob("*__*/")):
@@ -209,6 +238,9 @@ class CliniCAREClient(Client):
                 raise NonRetriableException(f"Job dir {job} has more than one trial for one task")
             trials[info["task_id"]] = trial
             models.add(info["model_name"])
+        if not trials:
+            # Otherwise a wrong job_dir yields a "successful" run with no scores at all.
+            raise NonRetriableException(f"CliniCARE job dir {job} has no finished trials")
         if len(models) > 1:
             raise NonRetriableException(f"Job dir {job} mixes models {sorted(models)}; one job dir per model")
         for model in models:

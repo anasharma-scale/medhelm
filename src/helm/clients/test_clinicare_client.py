@@ -1,5 +1,8 @@
 import json
+import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -68,13 +71,13 @@ def _fake_run_case(
 ) -> List[List[str]]:
     calls: List[List[str]] = []
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd, timeout, **kwargs):
         calls.append(list(cmd))
         stdout = json.dumps({"status": "ok", "trial_dir": str(trial)}) + "\n" if trial else ""
         return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
 
     monkeypatch.setattr(clinicare_client, "require_docker", lambda: None)
-    monkeypatch.setattr(clinicare_client.subprocess, "run", fake_run)
+    monkeypatch.setattr(clinicare_client, "run_in_process_group", fake_run)
     return calls
 
 
@@ -88,9 +91,14 @@ def test_unmapped_model_fails_closed():
         CliniCAREClient().make_request(Request(model="openai/gpt-4o", prompt=json.dumps(envelope)))
 
 
-def test_job_name_is_deterministic():
-    assert job_name("codex-gpt56sol", TASK) == f"medhelm_codex-gpt56sol_{TASK}"
-    assert job_name("codex-gpt56sol", TASK, "high") == f"medhelm_codex-gpt56sol_eff-high_{TASK}"
+def test_job_name_is_deterministic_and_separates_builds(tmp_path):
+    smoke, full = tmp_path / "tasks_smoke", tmp_path / "tasks"
+    name = job_name("codex-gpt56sol", TASK, full)
+    assert name == job_name("codex-gpt56sol", TASK, full)  # re-run resumes the same job
+    assert name.startswith("medhelm_codex-gpt56sol_") and name.endswith(f"_{TASK}")
+    # Same task id in two builds must not share a job dir (harbor refuses to resume across them).
+    assert name != job_name("codex-gpt56sol", TASK, smoke)
+    assert "_eff-high_" in job_name("codex-gpt56sol", TASK, full, "high")
 
 
 def test_read_trial_takes_task_id_from_task_path(tmp_path):
@@ -119,7 +127,7 @@ def test_live_runs_run_case_and_returns_reward(monkeypatch, live_root, tmp_path)
     assert cmd[:2] == [str(live_root / ".venv" / "bin" / "python"), CLINICARE_RUN_CASE]
     assert cmd[cmd.index("--system") + 1] == "codex-gpt56sol"
     assert cmd[cmd.index("--task-id") + 1] == TASK
-    assert cmd[cmd.index("--job-name") + 1] == job_name("codex-gpt56sol", TASK)
+    assert cmd[cmd.index("--job-name") + 1] == job_name("codex-gpt56sol", TASK, live_root / "benchmark" / "tasks")
     assert "--grade" not in cmd
 
 
@@ -130,11 +138,43 @@ def test_live_passes_grade_and_effort(monkeypatch, live_root, tmp_path):
     assert calls[0][calls[0].index("--effort") + 1] == "high"
 
 
-def test_live_preflight_refusal_is_fatal(monkeypatch, live_root):
-    _fake_run_case(monkeypatch, returncode=2, stderr="OPENAI_API_KEY not set")
+@pytest.mark.parametrize(
+    "returncode,stderr",
+    [
+        (2, "run_case: OPENAI_API_KEY not set"),  # preflight refusal
+        (2, "run_case: harbor refused the job (exit 1): FileExistsError"),  # stale job dir
+        (1, "Traceback (most recent call last): ModuleNotFoundError"),  # run_case itself crashed
+    ],
+)
+def test_any_run_case_failure_is_fatal(monkeypatch, live_root, returncode, stderr):
+    # Per-case outcomes always come back as exit 0, so any other exit is a broken setup: abort the
+    # run instead of recording an empty result for every remaining case.
+    _fake_run_case(monkeypatch, returncode=returncode, stderr=stderr)
     result = CliniCAREClient().make_request(_request(clinicare_root=str(live_root)))
     assert not result.success
     assert result.error_flags is not None and result.error_flags.is_fatal and not result.error_flags.is_retriable
+
+
+def test_timeout_kills_the_whole_process_group(tmp_path):
+    # run_case.py starts harbor as a child; killing only run_case.py would leave harbor running.
+    pid_file = tmp_path / "grandchild.pid"
+    script = (
+        "import subprocess, sys, time\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
+        "time.sleep(60)\n"
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        clinicare_client.run_in_process_group([sys.executable, "-c", script], 2, stdout=subprocess.PIPE)
+    grandchild = int(pid_file.read_text())
+    for _ in range(50):  # the kill is asynchronous; give the OS a moment to reap it
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    os.kill(grandchild, 9)
+    pytest.fail("grandchild survived the timeout")
 
 
 def test_live_dead_trial_is_non_fatal_and_not_retried(monkeypatch, live_root, tmp_path):
@@ -146,11 +186,11 @@ def test_live_dead_trial_is_non_fatal_and_not_retried(monkeypatch, live_root, tm
 
 
 def test_live_timeout_is_non_fatal(monkeypatch, live_root):
-    def timeout(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd, 1)
+    def timeout(cmd, timeout, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, timeout)
 
     monkeypatch.setattr(clinicare_client, "require_docker", lambda: None)
-    monkeypatch.setattr(clinicare_client.subprocess, "run", timeout)
+    monkeypatch.setattr(clinicare_client, "run_in_process_group", timeout)
     result = CliniCAREClient().make_request(_request(clinicare_root=str(live_root)))
     assert result.error_flags is not None and not result.error_flags.is_fatal
 
@@ -203,6 +243,17 @@ def test_replay_misattributed_job_raises(tmp_path):
     _trial(tmp_path / "job", TASK, model="openai/gpt-5.4")
     with pytest.raises(NonRetriableException, match="refusing to attribute"):
         CliniCAREClient().make_request(_request(job_dir=str(tmp_path / "job"), tasks_dir=str(tasks)))
+
+
+@pytest.mark.parametrize("make_dir", [False, True])
+def test_replay_missing_or_empty_job_dir_raises(tmp_path, make_dir):
+    # A mistyped job_dir must not produce a "successful" run with no scores.
+    tasks = _tasks(tmp_path, TASK)
+    job = tmp_path / "job"
+    if make_dir:
+        job.mkdir()
+    with pytest.raises(NonRetriableException, match="not found|no finished trials"):
+        CliniCAREClient().make_request(_request(job_dir=str(job), tasks_dir=str(tasks)))
 
 
 def test_replay_foreign_task_raises(tmp_path):
