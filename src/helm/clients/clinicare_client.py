@@ -21,7 +21,11 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from helm.benchmark.scenarios.clinicare_constants import CLINICARE_PROTOCOL, CLINICARE_RUN_CASE
+from helm.benchmark.scenarios.clinicare_constants import (
+    CLINICARE_PROTOCOL,
+    CLINICARE_RUN_CASE,
+    VERIFIER_FAILED_KEYS,
+)
 from helm.benchmark.scenarios.clinicare_scenario import resolve_clinicare_root, resolve_tasks_dir
 from helm.clients.client import Client
 from helm.common.cache import CacheConfig
@@ -93,6 +97,9 @@ def read_trial(trial_dir: Path) -> Dict[str, Any]:
     result = json.loads((trial_dir / "result.json").read_text(encoding="utf-8"))
     reward_path = trial_dir / "verifier" / "reward.json"
     verified = bool((result.get("verifier_result") or {}).get("rewards")) and reward_path.is_file()
+    reward = json.loads(reward_path.read_text(encoding="utf-8")) if verified else None
+    if reward is not None and any(reward.get(key) == 1 for key in VERIFIER_FAILED_KEYS):
+        verified, reward = False, None  # the verifier failed before scoring: its 0.0 is not a verdict
     exception = result.get("exception_info") or {}
     report = trial_dir / "verifier" / "report.md"
     agent = (result.get("config") or {}).get("agent") or {}
@@ -103,7 +110,7 @@ def read_trial(trial_dir: Path) -> Dict[str, Any]:
         "model_name": agent.get("model_name"),
         "agent_version": (result.get("agent_info") or {}).get("version"),
         "exception_type": exception.get("exception_type"),
-        "reward": json.loads(reward_path.read_text(encoding="utf-8")) if verified else None,
+        "reward": reward,
         "report_chars": len(report.read_text(encoding="utf-8")) if report.is_file() else 0,
     }
 

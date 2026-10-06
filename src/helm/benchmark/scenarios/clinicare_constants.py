@@ -7,6 +7,12 @@ CLINICARE_TASKS_DIR_ENV = "CLINICARE_TASKS_DIR"
 # The CliniCARE entry point that runs one case and prints the trial as JSON.
 CLINICARE_RUN_CASE = "scripts/run_case.py"
 
+# reward.json markers the in-container verifier writes when it failed before scoring the outcome
+# (judge.py: rubric bundle failed to load; test.sh: judge.py failed to launch). The reward still
+# says score 0.0, which is not a verdict, so the trial is unscored. Mirrors VERIFIER_FAILED_KEYS in
+# CliniCARE's scripts/run_case.py. Not judge_failed: that flags only the secondary process pass.
+VERIFIER_FAILED_KEYS = ("rubrics_load_failed", "judge_launch_failed")
+
 # Gold verdicts as they appear in the cohort bundle's expected_label column.
 VERDICT_LABELS = (
     "YES",

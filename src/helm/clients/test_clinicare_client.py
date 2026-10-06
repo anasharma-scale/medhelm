@@ -21,7 +21,15 @@ MODEL = "openai/gpt-5.6-sol"
 ROW = {"model": MODEL, "system": "codex-gpt56sol", "harbor_model": MODEL, "effort": None}
 
 
-def _trial(job: Path, task_id: str, *, model: str = MODEL, verified: bool = True, exc: Optional[str] = None) -> Path:
+def _trial(
+    job: Path,
+    task_id: str,
+    *,
+    model: str = MODEL,
+    verified: bool = True,
+    exc: Optional[str] = None,
+    reward: Optional[Dict[str, Any]] = None,
+) -> Path:
     trial = job / f"{task_id[:32]}__abcdefg"
     (trial / "verifier").mkdir(parents=True)
     result = {
@@ -33,7 +41,7 @@ def _trial(job: Path, task_id: str, *, model: str = MODEL, verified: bool = True
     }
     (trial / "result.json").write_text(json.dumps(result))
     if verified:
-        (trial / "verifier" / "reward.json").write_text(json.dumps({"score": 1.0, "evidence_calls": 3}))
+        (trial / "verifier" / "reward.json").write_text(json.dumps(reward or {"score": 1.0, "evidence_calls": 3}))
         (trial / "verifier" / "report.md").write_text("placeholder report")
     return trial
 
@@ -262,3 +270,28 @@ def test_replay_foreign_task_raises(tmp_path):
     _trial(tmp_path / "job", OTHER)
     with pytest.raises(NonRetriableException, match="different builds"):
         CliniCAREClient().make_request(_request(job_dir=str(tmp_path / "job"), tasks_dir=str(tasks)))
+
+
+@pytest.mark.parametrize(
+    "reward,status",
+    [
+        # The verifier failed before scoring; its 0.0 is not a verdict (judge.py / test.sh paths).
+        ({"score": 0.0, "judge_failed": 1, "rubrics_load_failed": 1}, "dead"),
+        ({"score": 0.0, "judge_failed": 1, "judge_launch_failed": 1}, "dead"),
+        # A missing report is a genuine 0, and judge_failed alone flags only the process pass.
+        ({"score": 0.0, "report_present": 0, "report_chars": 0}, "ok"),
+        ({"score": 1.0, "outcome_score": 1.0, "judge_failed": 1}, "ok"),
+    ],
+)
+def test_verifier_failure_is_unscored_not_a_wrong_verdict(tmp_path, reward, status):
+    trial = read_trial(_trial(tmp_path / "job", TASK, reward=reward))
+    assert trial["status"] == status
+    assert (trial["reward"] is None) == (status == "dead")
+
+
+def test_replay_verifier_failure_is_a_coverage_gap(tmp_path):
+    tasks = _tasks(tmp_path, TASK)
+    _trial(tmp_path / "job", TASK, reward={"score": 0.0, "judge_failed": 1, "rubrics_load_failed": 1})
+    result = CliniCAREClient().make_request(_request(job_dir=str(tmp_path / "job"), tasks_dir=str(tasks)))
+    assert not result.success  # -> clinicare_trial_failed, not clinicare_score = 0
+    assert result.error_flags is not None and not result.error_flags.is_fatal

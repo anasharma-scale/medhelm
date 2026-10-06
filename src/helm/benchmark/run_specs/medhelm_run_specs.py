@@ -2038,8 +2038,12 @@ def get_clinicare_spec(
         MetricSpec(class_name="helm.benchmark.metrics.clinicare_metrics.CliniCAREOfflineMetric", args={}),
     ] + get_basic_metric_specs([])
 
+    # Settings that change what is measured go in the run name, so their outputs don't overwrite one
+    # another under runs/<suite>/ (HELM appends only model and model_deployment). Paths and task_ids
+    # stay out: run names are published.
+    name_args = [f"{key}={value}" for key, value in (("effort", effort), ("grade", knobs["grade"] and "true")) if value]
     return RunSpec(
-        name="clinicare",
+        name="clinicare" + (":" + ",".join(name_args) if name_args else ""),
         scenario_spec=scenario_spec,
         adapter_spec=adapter_spec,
         metric_specs=metric_specs,

@@ -54,3 +54,18 @@ def test_empty_args_stay_out_of_the_scenario_spec():
     # Scenario args are shown in published group titles: a default run entry must carry no paths.
     assert get_clinicare_spec().scenario_spec.args == {}
     assert get_clinicare_spec(task_ids="a+b").scenario_spec.args == {"task_ids": "a+b"}
+
+
+def test_settings_that_change_the_measurement_get_distinct_run_names():
+    # HELM appends only model/model_deployment, so without this an effort or graded run would
+    # overwrite the plain run's output dir under runs/<suite>/.
+    names = {
+        get_clinicare_spec().name,
+        get_clinicare_spec(effort="high").name,
+        get_clinicare_spec(grade="true").name,
+        get_clinicare_spec(effort="high", grade="true").name,
+    }
+    assert len(names) == 4
+    assert get_clinicare_spec().name == "clinicare"
+    # Paths and task ids never reach the (published) run name.
+    assert get_clinicare_spec(clinicare_root="/x", tasks_dir="/y", task_ids="a+b").name == "clinicare"
