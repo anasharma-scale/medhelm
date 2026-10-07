@@ -59,6 +59,15 @@ def _request(**knobs: Any) -> Request:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_client_state(monkeypatch):
+    # CliniCAREClient keeps run-wide state on the class (shared across the instances AutoClient may
+    # build); give every test a clean run.
+    monkeypatch.setattr(CliniCAREClient, "_replay_index", {})
+    monkeypatch.setattr(CliniCAREClient, "_docker_checked", False)
+    monkeypatch.setattr(CliniCAREClient, "_warned_ungraded", False)
+
+
+@pytest.fixture(autouse=True)
 def _one_row_map(monkeypatch):
     monkeypatch.setattr(clinicare_client, "load_model_map", lambda: {"models": [dict(ROW)]})
 
@@ -75,13 +84,21 @@ def live_root(tmp_path: Path) -> Path:
 
 
 def _fake_run_case(
-    monkeypatch, *, returncode: int = 0, trial: Optional[Path] = None, stderr: str = ""
+    monkeypatch,
+    *,
+    returncode: int = 0,
+    trial: Optional[Path] = None,
+    stderr: str = "",
+    graded: Optional[bool] = None,
 ) -> List[List[str]]:
     calls: List[List[str]] = []
 
     def fake_run(cmd, timeout, **kwargs):
         calls.append(list(cmd))
-        stdout = json.dumps({"status": "ok", "trial_dir": str(trial)}) + "\n" if trial else ""
+        report: Dict[str, Any] = {"status": "ok", "trial_dir": str(trial)}
+        if graded is not None:
+            report["graded"] = graded
+        stdout = json.dumps(report) + "\n" if trial else ""
         return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
 
     monkeypatch.setattr(clinicare_client, "require_docker", lambda: None)
@@ -295,3 +312,79 @@ def test_replay_verifier_failure_is_a_coverage_gap(tmp_path):
     result = CliniCAREClient().make_request(_request(job_dir=str(tmp_path / "job"), tasks_dir=str(tasks)))
     assert not result.success  # -> clinicare_trial_failed, not clinicare_score = 0
     assert result.error_flags is not None and not result.error_flags.is_fatal
+
+
+GRADED_REWARD = {"score": 1.0, "process_pct": 75.0, "policy_support_judged": 1, "policy_citation_support_rate": 0.5}
+
+
+def _warnings(monkeypatch) -> List[str]:
+    seen: List[str] = []
+    monkeypatch.setattr(clinicare_client, "hwarn", lambda msg, **kw: seen.append(msg))
+    return seen
+
+
+def test_live_grade_requested_but_not_graded_warns_once(monkeypatch, live_root, tmp_path):
+    _fake_run_case(monkeypatch, trial=_trial(tmp_path / "jobs" / "j", TASK), graded=False)
+    warnings = _warnings(monkeypatch)
+    client = CliniCAREClient()
+    for _ in range(3):  # three ungraded cases in one run -> one warning, three counted in the stat
+        payload = _payload(client.make_request(_request(clinicare_root=str(live_root), grade=True)))
+        assert (payload["grade_requested"], payload["graded"]) == (True, False)
+        assert payload["reward"]["score"] == 1.0  # the deterministic score is kept
+    assert len(warnings) == 1 and "JUDGE_BASE_URL" in warnings[0]
+
+
+def test_live_graded_case_does_not_warn(monkeypatch, live_root, tmp_path):
+    _fake_run_case(monkeypatch, trial=_trial(tmp_path / "jobs" / "j", TASK, reward=GRADED_REWARD), graded=True)
+    warnings = _warnings(monkeypatch)
+    payload = _payload(CliniCAREClient().make_request(_request(clinicare_root=str(live_root), grade=True)))
+    assert (payload["grade_requested"], payload["graded"]) == (True, True)
+    assert warnings == []
+
+
+def test_live_without_grade_never_warns(monkeypatch, live_root, tmp_path):
+    _fake_run_case(monkeypatch, trial=_trial(tmp_path / "jobs" / "j", TASK), graded=False)
+    warnings = _warnings(monkeypatch)
+    payload = _payload(CliniCAREClient().make_request(_request(clinicare_root=str(live_root))))
+    assert payload["grade_requested"] is False
+    assert warnings == []
+
+
+def test_live_older_run_case_without_graded_flag_falls_back_to_reward(monkeypatch, live_root, tmp_path):
+    _fake_run_case(monkeypatch, trial=_trial(tmp_path / "jobs" / "j", TASK, reward=GRADED_REWARD))  # no flag
+    payload = _payload(CliniCAREClient().make_request(_request(clinicare_root=str(live_root), grade=True)))
+    assert payload["graded"] is True
+
+
+def test_live_previously_graded_case_counts_as_graded(monkeypatch, live_root, tmp_path):
+    # This run's judges failed (e.g. keys now missing), but an earlier run already graded the case:
+    # the judged columns are filled, so no warning.
+    _fake_run_case(monkeypatch, trial=_trial(tmp_path / "jobs" / "j", TASK, reward=GRADED_REWARD), graded=False)
+    warnings = _warnings(monkeypatch)
+    payload = _payload(CliniCAREClient().make_request(_request(clinicare_root=str(live_root), grade=True)))
+    assert payload["graded"] is True and warnings == []
+
+
+@pytest.mark.parametrize("reward,graded", [({"score": 1.0}, False), (GRADED_REWARD, True)])
+def test_replay_grade_requested_checks_the_reward(monkeypatch, tmp_path, reward, graded):
+    tasks = _tasks(tmp_path, TASK)
+    _trial(tmp_path / "job", TASK, reward=reward)
+    warnings = _warnings(monkeypatch)
+    result = CliniCAREClient().make_request(_request(job_dir=str(tmp_path / "job"), tasks_dir=str(tasks), grade=True))
+    assert _payload(result)["graded"] is graded
+    assert len(warnings) == (0 if graded else 1)
+    if not graded:
+        assert "Replay only reads results" in warnings[0]
+
+
+def test_warning_and_docker_check_are_shared_across_client_instances(monkeypatch, live_root, tmp_path):
+    # With --num-threads N, HELM's AutoClient can build N instances of this client concurrently. A
+    # real 5-thread replay logged the "not graded" warning 5 times before this was shared.
+    _fake_run_case(monkeypatch, trial=_trial(tmp_path / "jobs" / "j", TASK), graded=False)
+    docker_checks: List[int] = []
+    monkeypatch.setattr(clinicare_client, "require_docker", lambda: docker_checks.append(1))
+    warnings = _warnings(monkeypatch)
+    for _ in range(5):
+        CliniCAREClient().make_request(_request(clinicare_root=str(live_root), grade=True))
+    assert len(warnings) == 1
+    assert len(docker_checks) == 1

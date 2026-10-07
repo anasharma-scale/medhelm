@@ -95,7 +95,13 @@ class CliniCAREOfflineMetric(Metric):
         eval_cache_path: str,
     ) -> List[Stat]:
         del adapter_spec, metric_service, eval_cache_path
-        return _stats((_payload(request_state) or {}).get("reward"), OFFLINE_KEYS)
+        payload = _payload(request_state) or {}
+        stats = _stats(payload.get("reward"), OFFLINE_KEYS)
+        if payload.get("grade_requested"):
+            # Trust signal (off the leaderboard): grade=true was asked for but this case has no
+            # judged scores, e.g. missing judge credentials. Only emitted when grading was requested.
+            stats.append(Stat(MetricName("clinicare_grading_failed")).add(float(not payload.get("graded"))))
+        return stats
 
     def get_metadata(self) -> List[MetricMetadata]:
         return [

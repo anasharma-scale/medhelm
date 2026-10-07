@@ -14,6 +14,10 @@ CLINICARE_RUN_CASE = "scripts/run_case.py"
 # that flags only the secondary process pass.
 VERIFIER_FAILED_KEYS = ("rubrics_load_failed", "judge_launch_failed")
 
+# Keys CliniCARE's LLM judges add to reward.json (process.py and policy_support.py --amend-reward).
+# A case counts as graded only when both judges have written theirs.
+GRADED_KEYS = ("process_pct", "policy_support_judged")
+
 # Gold verdicts as they appear in the cohort bundle's expected_label column.
 VERDICT_LABELS = (
     "YES",

@@ -63,3 +63,18 @@ def test_offline_metric_reads_graded_keys():
     reward = {"score": 1.0, "process_pct": 0.75, "policy_citation_support_rate": 0.5}
     means = _means(CliniCAREOfflineMetric(), _state({"status": "ok", "reward": reward}))
     assert means == {"clinicare_process_score": 0.75, "clinicare_policy_support": 0.5}
+
+
+def test_grading_failed_only_reported_when_grading_was_requested():
+    metric = CliniCAREOfflineMetric()
+    reward = {"score": 1.0}
+    assert "clinicare_grading_failed" not in _means(metric, _state({"status": "ok", "reward": reward}))
+    ungraded = _state({"status": "ok", "reward": reward, "grade_requested": True, "graded": False})
+    assert _means(metric, ungraded) == {"clinicare_grading_failed": 1.0}
+    graded_reward = {"score": 1.0, "process_pct": 75.0, "policy_citation_support_rate": 0.5}
+    graded = _state({"status": "ok", "reward": graded_reward, "grade_requested": True, "graded": True})
+    assert _means(metric, graded) == {
+        "clinicare_process_score": 75.0,
+        "clinicare_policy_support": 0.5,
+        "clinicare_grading_failed": 0.0,
+    }

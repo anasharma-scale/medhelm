@@ -106,7 +106,9 @@ Check `stats.json`: `clinicare_tool_calls` > 0 and `clinicare_evidence_calls_aut
 
 ## Grading
 
-`clinicare_score` and the other deterministic metrics come from the in-container verifier and need no judge. `grade=true` additionally runs CliniCARE's LLM judges after each case. That fills `clinicare_process_score` and `clinicare_policy_support`. Both are reported separately and never blended into the main score, and both are simply absent when grading did not run.
+`clinicare_score` and the other deterministic metrics come from the in-container verifier and need no judge. `grade=true` additionally runs CliniCARE's LLM judges after each case. That fills `clinicare_process_score` and `clinicare_policy_support`. Both are reported separately and never blended into the main score, and both are absent when grading did not run.
+
+If `grade=true` was requested but a case comes back ungraded (most often missing `JUDGE_BASE_URL` / `JUDGE_API_KEY` in CliniCARE's `.env`), the case keeps its score and the run continues. MedHELM logs one warning and counts the case in `clinicare_grading_failed`, so a run whose judged columns are partly empty is visible. A case already graded by an earlier run counts as graded. In replay mode MedHELM runs no judges, so a job must be graded in CliniCARE first.
 
 ## Run-spec arguments
 
@@ -133,6 +135,7 @@ Check `stats.json`: `clinicare_tool_calls` > 0 and `clinicare_evidence_calls_aut
 | `clinicare_tool_calls` | MIMIC tool calls per episode |
 | `clinicare_process_score`, `clinicare_policy_support` | LLM-judged, graded runs only |
 | `clinicare_trial_failed` | *(not on the leaderboard)* cases with no clean scored trial |
+| `clinicare_grading_failed` | *(not on the leaderboard; only with `grade=true`)* cases left without judged scores |
 | `clinicare_evidence_calls_auth_error`, `clinicare_environment_degraded` | *(not on the leaderboard)* non-zero means the run lost MIMIC access or a degraded environment, so its numbers are invalid |
 
 A key a trial did not measure is **omitted, never counted as 0**. Absence varies a lot by system, so zero-filling would change rankings. Efficiency metrics are deliberately not shown: they would count the seed prompt, not the agent's real token spend.
@@ -153,6 +156,7 @@ CliniCARE task ids are a hash of case parameters and **identify the patient** to
 | `has no scripts/run_case.py` | Update the CliniCARE checkout. |
 | `No CliniCARE system for model ...` | Add the model to `clinicare_model_map.yaml`. |
 | Every case scores 0 with zero tool calls | The MIMIC sidecar did not start. Check `MIMIC_DATA_ROOT` and `MIMIC_API_SECRET` in CliniCARE's `.env`. |
+| Warning: `grade=true was requested but a case was not graded` | The judges could not run. Set `JUDGE_BASE_URL` and `JUDGE_API_KEY` in CliniCARE's `.env`. The judge's own error is in the case's job log under `jobs/medhelm/`. |
 | Codex trials die with `403 Forbidden` from a gateway | The gateway does not accept the Codex client. Use a gateway that does, or a different system. |
 | Codex `invalid_encrypted_content` on the second turn | A load-balancing gateway split the model across deployments. Set `CODEX_PIN_DEPLOYMENT` in CliniCARE's `.env` (see `codex_mcp_fix.py`). |
 | A re-run never retries a dead case | Harbor keeps finished trials, failed ones included. Delete that case's job dir under `jobs/medhelm/` to re-run it. |

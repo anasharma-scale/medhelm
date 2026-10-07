@@ -24,12 +24,13 @@ import yaml
 from helm.benchmark.scenarios.clinicare_constants import (
     CLINICARE_PROTOCOL,
     CLINICARE_RUN_CASE,
+    GRADED_KEYS,
     VERIFIER_FAILED_KEYS,
 )
 from helm.benchmark.scenarios.clinicare_scenario import resolve_clinicare_root, resolve_tasks_dir
 from helm.clients.client import Client
 from helm.common.cache import CacheConfig
-from helm.common.hierarchical_logger import hlog
+from helm.common.hierarchical_logger import hlog, hwarn
 from helm.common.request import ErrorFlags, GeneratedOutput, Request, RequestResult
 from helm.proxy.retry import NonRetriableException
 
@@ -115,9 +116,14 @@ def read_trial(trial_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _completion(trial: Dict[str, Any], system: str) -> RequestResult:
+def graded_in_reward(reward: Optional[Dict[str, Any]]) -> bool:
+    """Whether both LLM judges have written their scores into this reward.json."""
+    return reward is not None and all(key in reward for key in GRADED_KEYS)
+
+
+def _completion(trial: Dict[str, Any], system: str, grade_requested: bool, graded: bool) -> RequestResult:
     payload = {key: trial[key] for key in ("status", "reward", "report_chars", "agent_version", "exception_type")}
-    payload["system"] = system
+    payload.update(system=system, grade_requested=grade_requested, graded=graded)
     return RequestResult(
         success=True,
         cached=False,
@@ -145,13 +151,37 @@ class CliniCAREClient(Client):
     Refuses (NonRetriableException) an unmapped model, a trial produced by a different model than
     the map declares, a replay job dir that mixes models, or one holding tasks absent from the tasks
     dir. Does not cache: the harbor job dir is the cache (a finished case is never re-run).
+
+    Run-wide state is shared by every instance: with --num-threads N, HELM's AutoClient can build N
+    instances of this client at once (its client cache is not populated under a lock), and the
+    replay index, the Docker check and the once-per-run warning must still happen once.
     """
+
+    _lock = threading.Lock()
+    _replay_index: Dict[str, Dict[str, Path]] = {}
+    _docker_checked = False
+    _warned_ungraded = False
 
     def __init__(self, cache_config: Optional[CacheConfig] = None, **kwargs: Any):
         del cache_config, kwargs
-        self._lock = threading.Lock()
-        self._replay_index: Dict[str, Dict[str, Path]] = {}
-        self._docker_checked = False
+
+    def _note_grading(self, grade_requested: bool, graded: bool, how_to_fix: str) -> None:
+        """Warn (once per run) when grade=true was asked for and a case came back ungraded.
+
+        The case keeps its deterministic score; only the judged columns go missing, which would
+        otherwise be silent. Each such case is also counted in clinicare_grading_failed.
+        """
+        if not grade_requested or graded:
+            return
+        with self._lock:
+            if self._warned_ungraded:
+                return
+            type(self)._warned_ungraded = True
+        hwarn(
+            "CliniCARE: grade=true was requested but a case was not graded, so clinicare_process_score / "
+            f"clinicare_policy_support will be missing for it. {how_to_fix} "
+            "(warned once; see clinicare_grading_failed in stats.json for the count)"
+        )
 
     def make_request(self, request: Request) -> RequestResult:
         envelope = json.loads(request.prompt)
@@ -181,7 +211,7 @@ class CliniCAREClient(Client):
                     require_docker()
                 except RuntimeError as exc:
                     return _failed(str(exc), fatal=True)
-                self._docker_checked = True
+                type(self)._docker_checked = True
 
         task_id = envelope["task_id"]
         system = row["system"]
@@ -229,7 +259,17 @@ class CliniCAREClient(Client):
         self._check_attribution(trial["model_name"], row, Path(report["trial_dir"]))
         if trial["status"] == "dead":
             return _failed(f"CliniCARE trial died ({trial['exception_type']}); see {report['trial_dir']}", fatal=False)
-        return _completion(trial, system)
+        grade_requested = bool(envelope.get("grade"))
+        # Graded if both judges succeeded this run (run_case.py's flag) or the reward already carries
+        # their scores from an earlier graded run: either way the judged columns are filled. The
+        # reward check also covers older CliniCARE checkouts that do not report the flag.
+        graded = bool(report.get("graded")) or graded_in_reward(trial["reward"])
+        self._note_grading(
+            grade_requested,
+            graded,
+            "Check JUDGE_BASE_URL / JUDGE_API_KEY in CliniCARE's .env; the judge error is in the case's job log.",
+        )
+        return _completion(trial, system, grade_requested, graded)
 
     # -- replay -----------------------------------------------------------------------------------
 
@@ -273,7 +313,15 @@ class CliniCAREClient(Client):
         trial = read_trial(trial_dir)
         if trial["status"] == "dead":
             return _failed(f"CliniCARE trial died ({trial['exception_type']})", fatal=False)
-        return _completion(trial, row["system"])
+        grade_requested = bool(envelope.get("grade"))
+        graded = graded_in_reward(trial["reward"])
+        self._note_grading(
+            grade_requested,
+            graded,
+            "Replay only reads results: grade the job in CliniCARE first (run_case.py --grade, or "
+            "benchmark/eval/metrics/{process,policy_support}.py --amend-reward).",
+        )
+        return _completion(trial, row["system"], grade_requested, graded)
 
     @staticmethod
     def _check_attribution(model_name: Optional[str], row: Dict[str, Any], where: Path) -> None:
