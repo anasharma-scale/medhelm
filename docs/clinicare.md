@@ -12,7 +12,7 @@ Upstream: [github.com/scaleapi/clinicare](https://github.com/scaleapi/clinicare)
 One MedHELM instance is one CliniCARE task, and one request is one full agent episode. Like HealthAdminBench, CliniCARE stays a separate project: MedHELM wraps it, and never imports its code.
 
 ```
-medhelm-run clinicare:model=openai/gpt-5.6-sol
+medhelm-run clinicare:model=<model>
   → CliniCAREScenario       one instance per built task dir (instruction.md is the prompt)
   → CliniCAREAdapter        model stays the evaluated model; request goes to clinicare/harness
   → CliniCAREClient         runs  <CLINICARE_ROOT>/.venv/bin/python scripts/run_case.py ...
@@ -70,13 +70,13 @@ LLM-judged scores (`grade=true`) also need `JUDGE_BASE_URL`, `JUDGE_API_KEY` and
 
 ```yaml
 models:
-  - model: openai/gpt-5.6-sol        # MedHELM model (the leaderboard row); exact match only
-    system: codex-gpt56sol           # CliniCARE system tag
-    harbor_model: openai/gpt-5.6-sol # what every trial must record as config.agent.model_name
+  - model: openai/gpt-x         # MedHELM model (the leaderboard row); exact match only
+    system: codex-gptx            # CliniCARE system tag
+    harbor_model: openai/gpt-x    # what every trial must record as config.agent.model_name
     effort: null
 ```
 
-An unmapped model fails closed. Every trial, live or replayed, is checked against `harbor_model`, and a mismatch stops the run rather than publish one model's scores under another's name. The run entry still needs a `model_deployment` registered for the model; it is not called.
+The map ships with no models; add a row for each model you run. An unmapped model fails closed. Every trial, live or replayed, is checked against `harbor_model`, and a mismatch stops the run rather than publish one model's scores under another's name. The run entry still needs a `model_deployment` registered for the model; it is not called.
 
 ## Parallelism
 
@@ -89,14 +89,14 @@ Each case is a harbor job under `$CLINICARE_ROOT/jobs/medhelm/` (override with `
 Replay a provided job dir (no Docker, MIMIC or keys):
 
 ```bash
-medhelm-run --run-entries "clinicare:tasks_dir=<tasks dir>,job_dir=<job dir>,model=openai/gpt-5.6-sol,model_deployment=openai/gpt-5.6-sol" \
+medhelm-run --run-entries "clinicare:tasks_dir=<tasks dir>,job_dir=<job dir>,model=<model>,model_deployment=<model deployment>" \
   --suite clinicare-replay --max-eval-instances 750
 ```
 
 Run one case live, after the one-time setup. `tasks_dir` can point at a dir holding one task plus `_sidecar.compose.yml`, or pass `task_ids=` with the full build:
 
 ```bash
-medhelm-run --run-entries "clinicare:task_ids=<task id>,model=openai/gpt-5.6-sol,model_deployment=openai/gpt-5.6-sol" \
+medhelm-run --run-entries "clinicare:task_ids=<task id>,model=<model>,model_deployment=<model deployment>" \
   --suite clinicare-smoke --max-eval-instances 1 --num-threads 1
 helm-summarize --suite clinicare-smoke
 helm-server --suite clinicare-smoke

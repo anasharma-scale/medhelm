@@ -21,15 +21,15 @@ def _instance() -> Instance:
 
 def test_request_keeps_evaluated_model_and_reroutes_deployment():
     spec = get_clinicare_spec(clinicare_root="/opt/clinicare", effort="high", grade="true")
-    adapter_spec = replace(spec.adapter_spec, model="openai/gpt-5.6-sol", model_deployment="openai/gpt-5.6-sol")
+    adapter_spec = replace(spec.adapter_spec, model="openai/gpt-x", model_deployment="openai/gpt-x")
     request = build_clinicare_request(_instance(), adapter_spec)
 
-    assert request.model == "openai/gpt-5.6-sol"
+    assert request.model == "openai/gpt-x"
     assert request.model_deployment == CLINICARE_HARNESS_DEPLOYMENT
     envelope = json.loads(request.prompt)
     assert envelope["clinicare_protocol"] == CLINICARE_PROTOCOL
     assert envelope["task_id"] == TASK
-    assert envelope["evaluated_model"] == "openai/gpt-5.6-sol"
+    assert envelope["evaluated_model"] == "openai/gpt-x"
     assert envelope["clinicare_root"] == "/opt/clinicare"
     assert envelope["effort"] == "high"
     assert envelope["grade"] is True
@@ -38,7 +38,7 @@ def test_request_keeps_evaluated_model_and_reroutes_deployment():
 
 def test_replay_knob_reaches_envelope():
     spec = get_clinicare_spec(tasks_dir="/t", job_dir="/j")
-    request = build_clinicare_request(_instance(), replace(spec.adapter_spec, model="openai/gpt-5.6-sol"))
+    request = build_clinicare_request(_instance(), replace(spec.adapter_spec, model="openai/gpt-x"))
     envelope = json.loads(request.prompt)
     assert envelope["job_dir"] == "/j" and envelope["tasks_dir"] == "/t"
     assert "grade" not in envelope

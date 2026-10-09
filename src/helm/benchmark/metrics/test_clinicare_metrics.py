@@ -16,7 +16,7 @@ def _state(payload: Optional[Dict[str, Any]]) -> RequestState:
         request_mode=None,
         train_trial_index=0,
         output_mapping=None,
-        request=Request(model="openai/gpt-5.6-sol", prompt="{}"),
+        request=Request(model="openai/gpt-x", prompt="{}"),
         result=RequestResult(success=payload is not None, embedding=[], completions=completions, cached=False),
         num_train_instances=0,
         prompt_truncated=False,

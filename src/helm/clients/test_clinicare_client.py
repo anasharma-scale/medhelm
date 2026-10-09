@@ -17,8 +17,8 @@ from helm.proxy.retry import NonRetriableException
 # Placeholder ids only: real CliniCARE task ids identify patients.
 TASK = "advanced-imaging-000001"
 OTHER = "sepsis-bundle-000002"
-MODEL = "openai/gpt-5.6-sol"
-ROW = {"model": MODEL, "system": "codex-gpt56sol", "harbor_model": MODEL, "effort": None}
+MODEL = "openai/gpt-x"
+ROW = {"model": MODEL, "system": "codex-gptx", "harbor_model": MODEL, "effort": None}
 
 
 def _trial(
@@ -118,12 +118,12 @@ def test_unmapped_model_fails_closed():
 
 def test_job_name_is_deterministic_and_separates_builds(tmp_path):
     smoke, full = tmp_path / "tasks_smoke", tmp_path / "tasks"
-    name = job_name("codex-gpt56sol", TASK, full)
-    assert name == job_name("codex-gpt56sol", TASK, full)  # re-run resumes the same job
-    assert name.startswith("medhelm_codex-gpt56sol_") and name.endswith(f"_{TASK}")
+    name = job_name("codex-gptx", TASK, full)
+    assert name == job_name("codex-gptx", TASK, full)  # re-run resumes the same job
+    assert name.startswith("medhelm_codex-gptx_") and name.endswith(f"_{TASK}")
     # Same task id in two builds must not share a job dir (harbor refuses to resume across them).
-    assert name != job_name("codex-gpt56sol", TASK, smoke)
-    assert "_eff-high_" in job_name("codex-gpt56sol", TASK, full, "high")
+    assert name != job_name("codex-gptx", TASK, smoke)
+    assert "_eff-high_" in job_name("codex-gptx", TASK, full, "high")
 
 
 def test_read_trial_takes_task_id_from_task_path(tmp_path):
@@ -150,9 +150,9 @@ def test_live_runs_run_case_and_returns_reward(monkeypatch, live_root, tmp_path)
     assert _payload(result)["reward"]["score"] == 1.0
     cmd = calls[0]
     assert cmd[:2] == [str(live_root / ".venv" / "bin" / "python"), CLINICARE_RUN_CASE]
-    assert cmd[cmd.index("--system") + 1] == "codex-gpt56sol"
+    assert cmd[cmd.index("--system") + 1] == "codex-gptx"
     assert cmd[cmd.index("--task-id") + 1] == TASK
-    assert cmd[cmd.index("--job-name") + 1] == job_name("codex-gpt56sol", TASK, live_root / "benchmark" / "tasks")
+    assert cmd[cmd.index("--job-name") + 1] == job_name("codex-gptx", TASK, live_root / "benchmark" / "tasks")
     assert "--grade" not in cmd
 
 

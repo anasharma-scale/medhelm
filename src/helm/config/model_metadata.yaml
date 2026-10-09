@@ -3331,14 +3331,6 @@ models:
     release_date: 2025-11-13
     tags: [TEXT_MODEL_TAG, VISION_LANGUAGE_MODEL_TAG, OPENAI_CHATGPT_MODEL_TAG, LIMITED_FUNCTIONALITY_TEXT_MODEL_TAG, INSTRUCTION_FOLLOWING_MODEL_TAG]
 
-  - name: openai/gpt-5.6-sol
-    display_name: GPT-5.6-sol
-    description: GPT-5.6-sol, evaluated on CliniCARE-Bench through the Codex harness.
-    creator_organization_name: OpenAI
-    access: limited
-    release_date: 2026-08-01
-    tags: [TEXT_MODEL_TAG, FULL_FUNCTIONALITY_TEXT_MODEL_TAG]
-
   - name: openai/gpt-5.4
     display_name: GPT-5.4 (2026-03-05)
     description: GPT-5.4 (2026-03-05) is a model in the GPT-5 model family, and has similar training for code generation, bug fixing, refactoring, instruction following, long context and tool calling. ([blog](https://openai.com/index/gpt-5-4-for-developers/))

@@ -2829,13 +2829,6 @@ model_deployments:
     client_spec:
       class_name: "helm.clients.openai_client.OpenAIClient"
 
-  - name: openai/gpt-5.6-sol
-    model_name: openai/gpt-5.6-sol
-    tokenizer_name: openai/o200k_base
-    max_sequence_length: 400000
-    client_spec:
-      class_name: "helm.clients.openai_responses_client.OpenAIResponseClient"
-
   - name: openai/gpt-5-2025-08-07
     model_name: openai/gpt-5-2025-08-07
     tokenizer_name: openai/o200k_base
