@@ -12,12 +12,28 @@
 # One system per model in v1: results report under the evaluated model's name, so a second harness
 # for the same model would need its own leaderboard axis.
 
-#
-# No models are mapped yet, so every model fails closed until a row is added. A row looks like:
-#
-#   - model: <provider>/<model>
-#     system: <run_sweep.py system tag>
-#     harbor_model: <provider>/<model>
-#     effort: null
+# Systems are CliniCARE's `--systems medhelm` group. A vendor model with its own production CLI runs
+# on it; Qwen3.8 Max and Muse Spark run on opencode, whose model ids are routes on an
+# OpenAI-compatible gateway (OPENAI_BASE_URL), not vendor ids.
 
-models: []
+models:
+  - model: anthropic/claude-opus-5-5
+    system: claude-opus55
+    harbor_model: claude-opus-5-5
+    effort: null
+  - model: google/gemini-3.8-flash
+    system: gemini-38flash
+    harbor_model: gemini/gemini-3.8-flash
+    effort: null
+  - model: meta/muse-spark-1.3
+    system: opencode-musespark13
+    harbor_model: openai/meta_ai/muse-spark-1.3
+    effort: null
+  - model: openai/gpt-6-astra
+    system: codex-gpt6astra
+    harbor_model: openai/gpt-6-astra
+    effort: null
+  - model: qwen/qwen3.8-max-0902
+    system: opencode-qwen38max
+    harbor_model: openai/fireworks_ai/qwen3p8-max
+    effort: null

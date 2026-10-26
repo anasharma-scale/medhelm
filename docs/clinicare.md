@@ -52,6 +52,8 @@ This happens once, in the CliniCARE checkout, following its README and `DATA_ACC
 5. Copy `.env.template` to `.env`. Set `MIMIC_DATA_ROOT`, `CLINICARE_COHORT_DIR`, `CLINICARE_CORPUS_DIR`, a non-empty `MIMIC_API_SECRET`, and the model keys from [Credentials](#credentials). `run_case.py` loads `.env` itself.
 6. `bash scripts/build_image.sh`, then `uv run python benchmark/scripts/build_tasks.py`. **Set any `*_BASE_URL` before building.** The gateway host is baked into each task's network allowlist at build time.
 
+Rebuild the image and the tasks after pulling a CliniCARE update that changes the image (the trial `Dockerfile` or `packages/mimic_tools`). The image tag is a content hash, so tasks built earlier still point at the old image.
+
 ## Credentials
 
 Model credentials live in CliniCARE's `.env`, not in MedHELM's `credentials.conf`. The agent harness (Codex, Claude Code, Gemini CLI, OpenCode) calls the model from inside the trial container.
@@ -76,7 +78,17 @@ models:
     effort: null
 ```
 
-The map ships with no models; add a row for each model you run. An unmapped model fails closed. Every trial, live or replayed, is checked against `harbor_model`, and a mismatch stops the run rather than publish one model's scores under another's name. The run entry still needs a `model_deployment` registered for the model; it is not called.
+The map ships with five models, run by CliniCARE's `--systems medhelm` group:
+
+| MedHELM model | CliniCARE system | harness |
+| --- | --- | --- |
+| `anthropic/claude-opus-5-5` | `claude-opus55` | Claude Code |
+| `google/gemini-3.8-flash` | `gemini-38flash` | Gemini CLI |
+| `meta/muse-spark-1.3` | `opencode-musespark13` | OpenCode |
+| `openai/gpt-6-astra` | `codex-gpt6astra` | Codex |
+| `qwen/qwen3.8-max-0902` | `opencode-qwen38max` | OpenCode |
+
+The two OpenCode systems address their models as routes on an OpenAI-compatible gateway (`fireworks_ai/qwen3p8-max`, `meta_ai/muse-spark-1.3`), so they need `OPENAI_BASE_URL` set to a gateway that serves those names. Add a row for any other model you run. An unmapped model fails closed. Every trial, live or replayed, is checked against `harbor_model`, and a mismatch stops the run rather than publish one model's scores under another's name. The run entry still needs a `model_deployment` registered for the model; it is not called.
 
 ## Parallelism
 
