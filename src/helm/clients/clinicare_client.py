@@ -93,6 +93,34 @@ def run_in_process_group(cmd: list, timeout: int, **kwargs: Any) -> subprocess.C
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
+def task_checksum(task_dir: Path) -> str:
+    """harbor's task checksum (``Task.checksum``, i.e. ``dirhash(task_dir, "sha256")`` with dirhash's
+    defaults), which harbor records as ``task_checksum`` in each trial's result.json. Reimplemented so
+    MedHELM needs no dirhash dependency; symlinks are followed and empty dirs are skipped, as there."""
+
+    def walk(directory: Path) -> Optional[str]:
+        entries = []
+        for path in directory.iterdir():
+            if path.is_dir():
+                digest = walk(path)
+                if digest is not None:
+                    entries.append(f"dirhash:{digest}\000name:{path.name}")
+            else:
+                data = hashlib.sha256()
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(2**20), b""):
+                        data.update(chunk)
+                entries.append(f"data:{data.hexdigest()}\000name:{path.name}")
+        if not entries:
+            return None
+        return hashlib.sha256("\000\000".join(sorted(entries)).encode("utf-8")).hexdigest()
+
+    digest = walk(task_dir)
+    if digest is None:
+        raise ValueError(f"{task_dir}: nothing to hash")
+    return digest
+
+
 def read_trial(trial_dir: Path) -> Dict[str, Any]:
     """Status, rewards and identity of one finished trial (the run_case.py status rules)."""
     result = json.loads((trial_dir / "result.json").read_text(encoding="utf-8"))
@@ -109,6 +137,7 @@ def read_trial(trial_dir: Path) -> Dict[str, Any]:
         "status": "dead" if not verified else ("agent_error" if exception else "ok"),
         # harbor truncates trial dir names to 32 chars, so the task id comes from the task path.
         "task_id": Path(((result.get("task_id") or {}).get("path")) or "").name,
+        "task_checksum": result.get("task_checksum"),
         "model_name": agent.get("model_name"),
         "agent_version": (result.get("agent_info") or {}).get("version"),
         "exception_type": exception.get("exception_type"),
@@ -317,7 +346,7 @@ class CliniCAREClient(Client):
 
     Refuses (NonRetriableException) an unmapped model, a trial produced by a different model than
     the map declares, a replay job dir that mixes models, or one holding tasks absent from the tasks
-    dir. Does not cache: the harbor job dir is the cache (a finished case is never re-run).
+    dir or built from a different version of them. Does not cache: the harbor job dir is the cache (a finished case is never re-run).
 
     Run-wide state is shared by every instance: with --num-threads N, HELM's AutoClient can build N
     instances of this client at once (its client cache is not populated under a lock), and the
@@ -327,19 +356,24 @@ class CliniCAREClient(Client):
     _lock = threading.Lock()
     _replay_index: Dict[str, Dict[str, Path]] = {}
     _docker_checked = False
-    _warned: set = set()
+    _warned: set = set()  # (run, kind) pairs; a run is the envelope minus the task id
 
     def __init__(self, cache_config: Optional[CacheConfig] = None, **kwargs: Any):
         del cache_config, kwargs
 
-    def _warn(self, issues: list) -> None:
+    def _warn(self, envelope: Dict[str, Any], issues: list) -> None:
         """Log each kind of problem once per run, naming the first case it was seen in. The counts are
-        in stats.json (clinicare_trial_failed, clinicare_grading_failed and the trust signals)."""
+        in stats.json (clinicare_trial_failed, clinicare_grading_failed and the trust signals).
+
+        One medhelm-run process can run several run specs, and the class state outlives each, so a
+        warning is keyed by its run: every request of a run spec carries the same envelope but for the
+        task id."""
+        run = json.dumps({k: v for k, v in envelope.items() if k != "task_id"}, sort_keys=True)
         for key, message in issues:
             with self._lock:
-                if key in self._warned:
+                if (run, key) in self._warned:
                     continue
-                self._warned.add(key)
+                self._warned.add((run, key))
             hwarn(f"CliniCARE {message} (logged once per run; see stats.json for how many cases)")
 
     def make_request(self, request: Request) -> RequestResult:
@@ -424,12 +458,12 @@ class CliniCAREClient(Client):
         self._check_attribution(trial["model_name"], row, trial_dir)
         if trial["status"] == "dead":
             return _failed(f"CliniCARE {dead_trial_message(trial, trial_dir)}", fatal=False)
-        self._warn(trial_issues(trial, trial_dir))
+        self._warn(envelope, trial_issues(trial, trial_dir))
         grade_requested = bool(envelope.get("grade"))
         grading = live_grading(report, trial["reward"]) if grade_requested else {}
         graded = grade_requested and all(result.get("outcome") != "failed" for result in grading.values())
         if grade_requested:
-            self._warn(grading_issues(grading, trial_dir, jobs_dir / f"{trial_dir.parent.name}.log"))
+            self._warn(envelope, grading_issues(grading, trial_dir, jobs_dir / f"{trial_dir.parent.name}.log"))
         return _completion(trial, system, grade_requested, graded)
 
     # -- replay -----------------------------------------------------------------------------------
@@ -458,6 +492,18 @@ class CliniCAREClient(Client):
             raise NonRetriableException(
                 f"{len(foreign)} trial(s) in {job} have no task in {tasks_dir}; the two are from different builds"
             )
+        # The same task ids can survive a rebuild with different contents (a CliniCARE update), and the
+        # old trials would then be scored as answers to the new prompts. Same check as run_case.py.
+        stale = [
+            task_id
+            for task_id, trial in trials.items()
+            if read_trial(trial)["task_checksum"] != task_checksum(tasks_dir / task_id)
+        ]
+        if stale:
+            raise NonRetriableException(
+                f"{len(stale)} trial(s) in {job} were built from a different version of their task than "
+                f"{tasks_dir} (task checksum differs); replay against the tasks build that job ran on"
+            )
         n_tasks = sum(1 for d in tasks_dir.iterdir() if d.is_dir() and not d.name.startswith(("_", ".")))
         hlog(f"CliniCARE replay: {len(trials)} trials for {n_tasks} tasks ({job.name})")
         return trials
@@ -474,12 +520,12 @@ class CliniCAREClient(Client):
         trial = read_trial(trial_dir)
         if trial["status"] == "dead":
             return _failed(f"CliniCARE {dead_trial_message(trial, trial_dir)}", fatal=False)
-        self._warn(trial_issues(trial, trial_dir))
+        self._warn(envelope, trial_issues(trial, trial_dir))
         grade_requested = bool(envelope.get("grade"))
         grading = replay_grading(trial, trial_dir)
         graded = grade_requested and all(result["outcome"] != "failed" for result in grading.values())
         if grade_requested:
-            self._warn(grading_issues(grading, trial_dir, None))
+            self._warn(envelope, grading_issues(grading, trial_dir, None))
         return _completion(trial, row["system"], grade_requested, graded)
 
     @staticmethod

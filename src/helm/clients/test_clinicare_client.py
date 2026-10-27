@@ -10,7 +10,7 @@ import pytest
 
 from helm.benchmark.scenarios.clinicare_constants import CLINICARE_PROTOCOL, CLINICARE_RUN_CASE
 from helm.clients import clinicare_client
-from helm.clients.clinicare_client import CliniCAREClient, job_name, read_trial
+from helm.clients.clinicare_client import CliniCAREClient, job_name, read_trial, task_checksum
 from helm.common.request import Request
 from helm.proxy.retry import NonRetriableException
 
@@ -19,6 +19,8 @@ TASK = "advanced-imaging-000001"
 OTHER = "sepsis-bundle-000002"
 MODEL = "openai/gpt-x"
 ROW = {"model": MODEL, "system": "codex-gptx", "harbor_model": MODEL, "effort": None}
+# dirhash(<a task dir from _tasks>, "sha256"), computed with the dirhash package harbor uses.
+TASK_CHECKSUM = "8045fec8ddafb8abb1b6d037ccc8807eeee5102fbc6ba39323b032249967c20c"
 
 
 def _trial(
@@ -29,11 +31,13 @@ def _trial(
     verified: bool = True,
     exc: Optional[str] = None,
     reward: Optional[Dict[str, Any]] = None,
+    checksum: Optional[str] = TASK_CHECKSUM,
 ) -> Path:
     trial = job / f"{task_id[:32]}__abcdefg"
     (trial / "verifier").mkdir(parents=True)
     result = {
         "task_id": {"path": f"/x/benchmark/tasks/{task_id}"},
+        "task_checksum": checksum,
         "config": {"agent": {"name": "pkg:Agent", "model_name": model}},
         "agent_info": {"version": "1.0"},
         "verifier_result": {"rewards": {"reward": 1.0}} if verified else None,
@@ -49,7 +53,10 @@ def _trial(
 def _tasks(root: Path, *task_ids: str) -> Path:
     tasks = root / "benchmark" / "tasks"
     for task_id in task_ids:
-        (tasks / task_id).mkdir(parents=True)
+        (tasks / task_id / "environment").mkdir(parents=True)
+        (tasks / task_id / "empty").mkdir()  # dirhash skips empty dirs
+        (tasks / task_id / "instruction.md").write_text("placeholder task")
+        (tasks / task_id / "environment" / "Dockerfile").write_text("FROM scratch\n")
     return tasks
 
 
@@ -289,6 +296,21 @@ def test_replay_foreign_task_raises(tmp_path):
     _trial(tmp_path / "job", TASK)
     _trial(tmp_path / "job", OTHER)
     with pytest.raises(NonRetriableException, match="different builds"):
+        CliniCAREClient().make_request(_request(job_dir=str(tmp_path / "job"), tasks_dir=str(tasks)))
+
+
+def test_task_checksum_matches_harbor(tmp_path):
+    assert task_checksum(_tasks(tmp_path, TASK) / TASK) == TASK_CHECKSUM
+
+
+@pytest.mark.parametrize("checksum", ["0" * 64, None])
+def test_replay_stale_task_build_raises(tmp_path, checksum):
+    # Same task ids, different contents (a CliniCARE update rebuilt in place): the old trials would
+    # be scored against the new prompts.
+    tasks = _tasks(tmp_path, TASK, OTHER)
+    _trial(tmp_path / "job", TASK)
+    _trial(tmp_path / "job", OTHER, checksum=checksum)
+    with pytest.raises(NonRetriableException, match="different version"):
         CliniCAREClient().make_request(_request(job_dir=str(tmp_path / "job"), tasks_dir=str(tasks)))
 
 
@@ -558,6 +580,18 @@ def test_different_problems_each_warn_once(monkeypatch, live_root, tmp_path):
         client.make_request(_request(clinicare_root=str(live_root), grade=True))
     tags = sorted(w.split("]")[0] + "]" for w in warnings)
     assert tags == ["CliniCARE [agent]", "CliniCARE [credentials]", "CliniCARE [credentials]"]
+
+
+def test_each_run_logs_its_own_warnings(monkeypatch, live_root, tmp_path):
+    # One medhelm-run process can run several run specs; a problem warned in one must still be
+    # warned in the next.
+    _fake_run_case(monkeypatch, trial=_trial(tmp_path / "jobs" / "j", TASK), graded=False)
+    warnings = _warnings(monkeypatch)
+    client = CliniCAREClient()
+    for run in ({}, {"effort": "high"}):
+        for _ in range(2):
+            client.make_request(_request(clinicare_root=str(live_root), grade=True, **run))
+    assert len(warnings) == 2
 
 
 def test_warning_and_docker_check_are_shared_across_client_instances(monkeypatch, live_root, tmp_path):

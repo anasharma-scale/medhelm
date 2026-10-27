@@ -105,7 +105,7 @@ medhelm-run --run-entries "clinicare:tasks_dir=<tasks dir>,job_dir=<job dir>,mod
   --suite clinicare-replay --max-eval-instances 750
 ```
 
-Replay expects one job dir covering every task in `tasks_dir`, such as a CliniCARE sweep job. Any task without a trial in it counts in `clinicare_trial_failed`. A live MedHELM run writes one job dir per case under `jobs/medhelm/`, so to replay one of those, add `task_ids=` with that case's task id.
+Replay expects one job dir covering every task in `tasks_dir`, such as a CliniCARE sweep job. Any task without a trial in it counts in `clinicare_trial_failed`. A live MedHELM run writes one job dir per case under `jobs/medhelm/`, so to replay one of those, add `task_ids=` with that case's task id. Replay refuses a job whose trials were built from a different version of their tasks (harbor's task checksum differs), so replay against the tasks build the job ran on.
 
 Run one case live, after the one-time setup. `tasks_dir` can point at a dir holding one task plus `_sidecar.compose.yml`, or pass `task_ids=` with the full build:
 
@@ -187,6 +187,7 @@ CliniCARE task ids are a hash of case parameters and **identify the patient** to
 | A `[credentials]`, `[agent]`, `[judge]`, `[task build]`, `[environment]` or `[timeout]` warning | See [Warnings](#warnings). |
 | Codex trials die with `403 Forbidden` from a gateway | The gateway does not accept the Codex client. Use a gateway that does, or a different system. |
 | Codex `invalid_encrypted_content` on the second turn | A load-balancing gateway split the model across deployments. Set `CODEX_PIN_DEPLOYMENT` in CliniCARE's `.env` (see `codex_mcp_fix.py`). |
+| Replay: `... built from a different version of their task than ...` | The tasks were rebuilt (e.g. after a CliniCARE update) since the job ran. Point `tasks_dir=` at the build the job used, or re-run live. |
 | A re-run never retries a dead case | Harbor keeps finished trials, failed ones included. Delete that case's job dir under `jobs/medhelm/` to re-run it. |
 | `run_case failed ... built from a different version of task` or `harbor refused the job` | The jobs dir holds results from an older CliniCARE or task build. Use a fresh `jobs_dir=` (or delete the old one) and re-run. |
 | Cases fail with 401s although CliniCARE's `.env` has the right key | A variable exported in your shell wins over `.env`. Unset `OPENAI_API_KEY` / `*_BASE_URL` in the shell that runs `medhelm-run`, or make them match. |
